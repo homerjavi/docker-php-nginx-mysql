@@ -76,7 +76,7 @@ ARG GID=1000
 # Crear el grupo y usuario con el mismo UID/GID que en el host
 RUN groupadd -g $GID laravel && useradd -u $UID -g $GID -m laravel
 
-RUN mkdir /var/www/app
+RUN mkdir /var/www
 # Dar permisos al usuario en los directorios de Laravel
 RUN chown -R laravel:laravel /var/www
 RUN chown -R laravel:laravel /composer

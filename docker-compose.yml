@@ -5,7 +5,7 @@ services:
     ####################################################################################################
     php:
         env_file:
-            - .env
+            - .env_docker
         build:
             context: .docker/php
             args:
@@ -32,6 +32,8 @@ services:
             DB_PASSWORD: ${DB_PASSWORD:-123456}
             DB_PASSWORD_ROOT: ${DB_PASSWORD_ROOT:-64321}
             DB_HOST: db
+            VITE_PORT: ${VITE_PORT:-5173}
+            NGINX_PORT: ${NGINX_PORT:-80}
         ports:
             - ${VITE_PORT:-5173}:5173
             # - 8000:8000 # php artisan serve
@@ -45,7 +47,7 @@ services:
     nginx:
         image: nginx
         env_file:
-            - .env
+            - .env_docker
         ports:
             - ${NGINX_PORT:-80}:80
         volumes:
@@ -61,7 +63,7 @@ services:
     db:
         image: mysql:8.1
         env_file:
-            - .env
+            - .env_docker
         ports:
             - ${MYSQL_PORT:-3306}:3306
         volumes:
