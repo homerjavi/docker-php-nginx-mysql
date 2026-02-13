@@ -24,6 +24,7 @@ services:
                 - DB_PASSWORD=${DB_PASSWORD:-123456}
                 - DB_PASSWORD_ROOT=${DB_PASSWORD_ROOT:-64321}
         environment:
+            APP_NAME: ${COMPOSE_PROJECT_NAME:-Laravel}
             INSTALL_LARAVEL: ${INSTALL_LARAVEL:-false}
             LARAVEL_VERSION: ${LARAVEL_VERSION:-12.*}
             DB_CONNECTION: ${DB_CONNECTION:-mysql}

@@ -9,8 +9,15 @@ DB_DATABASE=${DB_DATABASE:-laravel}
 DB_USERNAME=${DB_USERNAME:-user}
 DB_PASSWORD=${DB_PASSWORD:-123456}
 
-# Si Laravel no está instalado, lo instala sin configurar SQLite
+# Check if we need to install Laravel
 if [ "$INSTALL_LARAVEL" = "true" ] && [ ! -f /var/www/composer.json ]; then
+    IS_NEW_INSTALL="true"
+else
+    IS_NEW_INSTALL="false"
+fi
+
+# 1. Instalación de Laravel (si corresponde)
+if [ "$IS_NEW_INSTALL" = "true" ]; then
     echo "🚀 Laravel no encontrado en /var/www. Instalando Laravel..."
 
     # Crear directorio temporal para la instalación
@@ -35,19 +42,43 @@ if [ "$INSTALL_LARAVEL" = "true" ] && [ ! -f /var/www/composer.json ]; then
     rm -rf /tmp/laravel_temp
 
     echo "✅ Archivos movidos correctamente."
+fi
 
-    # Configurar la base de datos en el .env automáticamente
-    if [ -f /var/www/.env ]; then
-        sed -i "s|^#\?\s*DB_CONNECTION=.*|DB_CONNECTION=$DB_CONNECTION|" /var/www/.env
-        sed -i "s|^#\?\s*DB_HOST=.*|DB_HOST=$DB_HOST|" /var/www/.env
-        sed -i "s|^#\?\s*DB_PORT=.*|DB_PORT=$DB_PORT|" /var/www/.env
-        sed -i "s|^#\?\s*DB_DATABASE=.*|DB_DATABASE=$DB_DATABASE|" /var/www/.env
-        sed -i "s|^#\?\s*DB_USERNAME=.*|DB_USERNAME=$DB_USERNAME|" /var/www/.env
-        sed -i "s|^#\?\s*DB_PASSWORD=.*|DB_PASSWORD=$DB_PASSWORD|" /var/www/.env
-        
-        # Ajustes adicionales comunes
-        sed -i "s|^#\?\s*APP_URL=.*|APP_URL=http://localhost:${NGINX_PORT:-80}|" /var/www/.env
+# 2.# Configurar la base de datos en el .env automáticamente (SE EJECUTA SIEMPRE el reemplazo si existe archivo)
+if [ -f /var/www/.env ]; then
+    echo "🔄 Sincronizando variables de entorno..."
+    
+    # Base de Datos
+    sed -i "s|^#\?\s*DB_CONNECTION=.*|DB_CONNECTION=$DB_CONNECTION|" /var/www/.env
+    sed -i "s|^#\?\s*DB_HOST=.*|DB_HOST=$DB_HOST|" /var/www/.env
+    sed -i "s|^#\?\s*DB_PORT=.*|DB_PORT=$DB_PORT|" /var/www/.env
+    sed -i "s|^#\?\s*DB_DATABASE=.*|DB_DATABASE=$DB_DATABASE|" /var/www/.env
+    sed -i "s|^#\?\s*DB_USERNAME=.*|DB_USERNAME=$DB_USERNAME|" /var/www/.env
+    sed -i "s|^#\?\s*DB_PASSWORD=.*|DB_PASSWORD=$DB_PASSWORD|" /var/www/.env
+    
+    # App General
+    sed -i "s|^#\?\s*APP_NAME=.*|APP_NAME=\"$APP_NAME\"|" /var/www/.env
+    sed -i "s|^#\?\s*APP_URL=.*|APP_URL=http://localhost:${NGINX_PORT:-80}|" /var/www/.env
+
+    # Configuración de Puertos y Vite (Si no existen, se agregan al final)
+    # VITE_PORT
+    if grep -q "VITE_PORT=" /var/www/.env; then
+        sed -i "s|^#\?\s*VITE_PORT=.*|VITE_PORT=${VITE_PORT:-5173}|" /var/www/.env
+    else
+        echo "VITE_PORT=${VITE_PORT:-5173}" >> /var/www/.env
     fi
+
+    # NGINX_PORT
+    if grep -q "NGINX_PORT=" /var/www/.env; then
+        sed -i "s|^#\?\s*NGINX_PORT=.*|NGINX_PORT=${NGINX_PORT:-80}|" /var/www/.env
+    else
+        echo "NGINX_PORT=${NGINX_PORT:-80}" >> /var/www/.env
+    fi
+fi
+
+# 3. Pasos Post-Instalación (solo si acabamos de instalar)
+if [ "$IS_NEW_INSTALL" = "true" ]; then
+    echo "🔧 Configuración inicial completada."
 
     echo "🔧 Configuración de base de datos establecida en .env"
 
@@ -69,7 +100,7 @@ if [ "$INSTALL_LARAVEL" = "true" ] && [ ! -f /var/www/composer.json ]; then
     fi
 
 else
-    echo "🔹 Laravel ya está instalado o INSTALL_LARAVEL es false. Omitiendo instalación."
+    echo "🔹 Laravel ya está instalado (o INSTALL_LARAVEL=false). Omitiendo instalación nueva."
 fi
 
 exec "$@"
