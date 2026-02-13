@@ -11,7 +11,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # mix
 RUN apt-get update \
-  && apt-get install -y build-essential zlib1g-dev default-mysql-client curl gnupg procps vim git unzip libzip-dev libpq-dev \
+  && apt-get install -y build-essential zlib1g-dev default-mysql-client curl gnupg procps vim git unzip libzip-dev libpq-dev rsync \
   && docker-php-ext-install zip pdo_mysql pdo_pgsql pgsql
 
 # intl
@@ -76,7 +76,7 @@ ARG GID=1000
 # Crear el grupo y usuario con el mismo UID/GID que en el host
 RUN groupadd -g $GID laravel && useradd -u $UID -g $GID -m laravel
 
-RUN mkdir /var/www
+RUN mkdir -p /var/www
 # Dar permisos al usuario en los directorios de Laravel
 RUN chown -R laravel:laravel /var/www
 RUN chown -R laravel:laravel /composer

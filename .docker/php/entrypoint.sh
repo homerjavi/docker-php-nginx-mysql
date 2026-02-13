@@ -25,11 +25,16 @@ if [ "$INSTALL_LARAVEL" = "true" ] && [ ! -f /var/www/composer.json ]; then
     echo "✅ Laravel descargado en directorio temporal."
 
     # Mover archivos al directorio raíz (incluyendo ocultos)
-    # Usamos cp -a para preservar permisos y estructura, luego borramos temporal
-    cp -a /tmp/laravel_temp/. /var/www/
+    # Usamos rsync para mayor robustez, o cp como fallback
+    echo "📂 Moviendo archivos a /var/www..."
+    if command -v rsync >/dev/null 2>&1; then
+        rsync -a /tmp/laravel_temp/ /var/www/
+    else
+        cp -a /tmp/laravel_temp/. /var/www/
+    fi
     rm -rf /tmp/laravel_temp
 
-    echo "📂 Archivos movidos a /var/www."
+    echo "✅ Archivos movidos correctamente."
 
     # Configurar la base de datos en el .env automáticamente
     if [ -f /var/www/.env ]; then
