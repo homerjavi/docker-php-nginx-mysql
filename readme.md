@@ -54,7 +54,7 @@ En el primer arranque (con `INSTALL_LARAVEL=true` y sin Laravel instalado) se ej
 - Sincronización de variables al `.env` de Laravel
 - Migración y seed de la base de datos (`php artisan migrate --seed`)
 - Instalación de dependencias NPM
-- Configuración de Vite para Docker (HMR)
+- Configuración de Vite para Docker con Tailwind CSS (HMR)
 
 ---
 
@@ -146,6 +146,43 @@ Si quieres reutilizar el template para un proyecto nuevo:
 # 4. Levantar de nuevo (instalará Laravel desde cero)
 ./scripts/up.sh
 ```
+
+---
+
+## Configuración manual de Vite (si falla el entrypoint)
+
+Si el script de configuración automática falla, puedes crear manualmente el archivo `vite.config.js` en la raíz de tu proyecto Laravel:
+
+```javascript
+import { defineConfig } from 'vite';
+import laravel from 'laravel-vite-plugin';
+import tailwindcss from '@tailwindcss/vite';
+
+export default defineConfig({
+    plugins: [
+        laravel({
+            input: ['resources/css/app.css', 'resources/js/app.js'],
+            refresh: true,
+        }),
+        tailwindcss(),
+    ],
+    server: {
+        host: '0.0.0.0',
+        port: 5173,
+        strictPort: true,
+        watch: {
+            usePolling: true,
+            interval: 1000,
+        },
+        hmr: {
+            host: 'localhost',
+            clientPort: parseInt(process.env.VITE_PORT || 5173),
+        },
+    },
+});
+```
+
+> **Nota**: Asegúrate de tener instalado el plugin de Tailwind CSS: `npm install @tailwindcss/vite`
 
 ---
 

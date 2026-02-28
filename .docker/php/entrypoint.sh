@@ -157,11 +157,44 @@ if [ "$IS_NEW_INSTALL" = "true" ]; then
         npm install
     fi
 
-    if [ -f "/var/www/vite.config.js" ] && ! grep -q "server: {" /var/www/vite.config.js; then
-        echo "🔧 Configurando vite.config.js para Docker..."
+    if [ -f "/var/www/vite.config.js" ] && ! grep -q "tailwindcss" /var/www/vite.config.js; then
+        echo "🔧 Configurando vite.config.js para Docker con Tailwind CSS..."
         VITE_PORT_VAL=$(grep "^VITE_PORT=" "$ENV_DOCKER" 2>/dev/null | cut -d'=' -f2 | sed 's/ *#.*//' | tr -d '"' | tr -d "'")
         VITE_PORT_VAL="${VITE_PORT_VAL:-5173}"
-        sed -i "/export default defineConfig({/a \    server: {\n        host: '0.0.0.0',\n        port: 5173,\n        hmr: {\n            host: 'localhost',\n            clientPort: ${VITE_PORT_VAL}\n        }\n    }," /var/www/vite.config.js
+        
+        cat > /var/www/vite.config.js << 'EOF'
+import { defineConfig } from 'vite';
+import laravel from 'laravel-vite-plugin';
+import tailwindcss from '@tailwindcss/vite';
+
+export default defineConfig({
+    plugins: [
+        laravel({
+            input: ['resources/css/app.css', 'resources/js/app.js'],
+            refresh: true,
+        }),
+        tailwindcss(),
+    ],
+    server: {
+        host: '0.0.0.0',
+        port: 5173,
+        strictPort: true,
+        watch: {
+            usePolling: true,
+            interval: 1000,
+        },
+        hmr: {
+            host: 'localhost',
+            clientPort: parseInt(process.env.VITE_PORT || 5173),
+        },
+    },
+});
+EOF
+        
+        # Update the port if different from default
+        if [ "$VITE_PORT_VAL" != "5173" ]; then
+            sed -i "s/port: 5173,/port: ${VITE_PORT_VAL},/" /var/www/vite.config.js
+        fi
     fi
 fi
 
