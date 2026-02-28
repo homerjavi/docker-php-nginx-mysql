@@ -1,26 +1,37 @@
 #!/bin/sh
 set -e
 
-# Variables para la base de datos
-DB_CONNECTION=${DB_CONNECTION:-mysql}
-DB_HOST=${DB_HOST:-db}
-DB_PORT=${DB_PORT:-3306}
-DB_DATABASE=${DB_DATABASE:-laravel}
-DB_USERNAME=${DB_USERNAME:-user}
-DB_PASSWORD=${DB_PASSWORD:-123456}
+ENV_DOCKER="/var/www/.env_docker"
+ENV_LARAVEL="/var/www/.env"
 
-# Check if we need to install Laravel
-if [ "$INSTALL_LARAVEL" = "true" ] && [ ! -f /var/www/composer.json ]; then
-    IS_NEW_INSTALL="true"
-else
-    IS_NEW_INSTALL="false"
+# ---------------------------------------------------------------------------
+# Read INSTALL_LARAVEL and LARAVEL_VERSION directly from the mounted
+# .env_docker file. This is more reliable than depending on Docker Compose
+# env var interpolation, which can have issues with inline comments or
+# quoted empty values (e.g. LARAVEL_VERSION="").
+# ---------------------------------------------------------------------------
+INSTALL_LARAVEL="false"
+LARAVEL_VERSION=""
+
+if [ -f "$ENV_DOCKER" ]; then
+    _val=$(grep "^INSTALL_LARAVEL=" "$ENV_DOCKER" 2>/dev/null | cut -d'=' -f2 | sed 's/ *#.*//' | tr -d '"' | tr -d "'")
+    [ -n "$_val" ] && INSTALL_LARAVEL="$_val"
+
+    _val=$(grep "^LARAVEL_VERSION=" "$ENV_DOCKER" 2>/dev/null | cut -d'=' -f2- | sed 's/ *#.*//' | tr -d '"' | tr -d "'")
+    LARAVEL_VERSION="$_val"
 fi
 
-# 1. Instalación de Laravel (si corresponde)
-if [ "$IS_NEW_INSTALL" = "true" ]; then
-    echo "🚀 Laravel no encontrado en /var/www. Instalando Laravel..."
+echo "⚙️  INSTALL_LARAVEL=${INSTALL_LARAVEL}"
+echo "⚙️  LARAVEL_VERSION=${LARAVEL_VERSION:-latest}"
 
-    # Crear directorio temporal para la instalación
+# ---------------------------------------------------------------------------
+# 1. Instalación de Laravel
+# Se usa el fichero `artisan` como indicador de que Laravel ya está instalado,
+# ya que es específico de Laravel y siempre está presente tras la instalación.
+# ---------------------------------------------------------------------------
+if [ "$INSTALL_LARAVEL" = "true" ] && [ ! -f /var/www/artisan ]; then
+    echo "🚀 Instalando Laravel en /var/www..."
+
     mkdir -p /tmp/laravel_temp
 
     if [ -z "$LARAVEL_VERSION" ]; then
@@ -29,10 +40,6 @@ if [ "$IS_NEW_INSTALL" = "true" ]; then
         composer create-project laravel/laravel="${LARAVEL_VERSION}" /tmp/laravel_temp
     fi
 
-    echo "✅ Laravel descargado en directorio temporal."
-
-    # Mover archivos al directorio raíz (incluyendo ocultos)
-    # Usamos rsync para mayor robustez, o cp como fallback
     echo "📂 Moviendo archivos a /var/www..."
     if command -v rsync >/dev/null 2>&1; then
         rsync -a /tmp/laravel_temp/ /var/www/
@@ -41,66 +48,121 @@ if [ "$IS_NEW_INSTALL" = "true" ]; then
     fi
     rm -rf /tmp/laravel_temp
 
-    echo "✅ Archivos movidos correctamente."
+    echo "✅ Laravel instalado correctamente."
+    IS_NEW_INSTALL="true"
+else
+    if [ "$INSTALL_LARAVEL" != "true" ]; then
+        echo "🔹 INSTALL_LARAVEL=false. Omitiendo instalación."
+    else
+        echo "🔹 Laravel ya está instalado (artisan encontrado). Omitiendo instalación nueva."
+    fi
+    IS_NEW_INSTALL="false"
 fi
 
-# 2.# Configurar la base de datos en el .env automáticamente (SE EJECUTA SIEMPRE el reemplazo si existe archivo)
-if [ -f /var/www/.env ]; then
-    echo "🔄 Sincronizando variables de entorno..."
-    
-    # Base de Datos
-    sed -i "s|^#\?\s*DB_CONNECTION=.*|DB_CONNECTION=$DB_CONNECTION|" /var/www/.env
-    sed -i "s|^#\?\s*DB_HOST=.*|DB_HOST=$DB_HOST|" /var/www/.env
-    sed -i "s|^#\?\s*DB_PORT=.*|DB_PORT=$DB_PORT|" /var/www/.env
-    sed -i "s|^#\?\s*DB_DATABASE=.*|DB_DATABASE=$DB_DATABASE|" /var/www/.env
-    sed -i "s|^#\?\s*DB_USERNAME=.*|DB_USERNAME=$DB_USERNAME|" /var/www/.env
-    sed -i "s|^#\?\s*DB_PASSWORD=.*|DB_PASSWORD=$DB_PASSWORD|" /var/www/.env
-    
-    # App General
-    sed -i "s|^#\?\s*APP_NAME=.*|APP_NAME=\"$APP_NAME\"|" /var/www/.env
-    sed -i "s|^#\?\s*APP_URL=.*|APP_URL=http://localhost:${NGINX_PORT:-80}|" /var/www/.env
+# ---------------------------------------------------------------------------
+# Helper: decide si una variable del .env_docker es exclusiva de Docker
+# y no debe copiarse al .env de Laravel.
+# ---------------------------------------------------------------------------
+SKIP_VARS="UID GID PHP_VERSION NODE_VERSION XDEBUG_PORT INSTALL_LARAVEL LARAVEL_VERSION MYSQL_PORT DB_ROOT_PASSWORD"
 
-    # Configuración de Puertos y Vite (Si no existen, se agregan al final)
-    # VITE_PORT
-    if grep -q "VITE_PORT=" /var/www/.env; then
-        sed -i "s|^#\?\s*VITE_PORT=.*|VITE_PORT=${VITE_PORT:-5173}|" /var/www/.env
-    else
-        echo "VITE_PORT=${VITE_PORT:-5173}" >> /var/www/.env
-    fi
+is_skip_var() {
+    for _s in $SKIP_VARS; do
+        [ "$1" = "$_s" ] && return 0
+    done
+    return 1
+}
 
-    # NGINX_PORT
-    if grep -q "NGINX_PORT=" /var/www/.env; then
-        sed -i "s|^#\?\s*NGINX_PORT=.*|NGINX_PORT=${NGINX_PORT:-80}|" /var/www/.env
-    else
-        echo "NGINX_PORT=${NGINX_PORT:-80}" >> /var/www/.env
-    fi
+# ---------------------------------------------------------------------------
+# 2. Sincronizar variables desde .env_docker al .env de Laravel.
+# Se lee directamente el fichero montado para que .env_docker sea la única
+# fuente de verdad: puertos, credenciales de BD, nombre de la app, etc.
+# ---------------------------------------------------------------------------
+if [ -f "$ENV_LARAVEL" ] && [ -f "$ENV_DOCKER" ]; then
+    echo "🔄 Sincronizando variables desde .env_docker..."
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Ignorar líneas vacías y comentarios
+        case "$line" in
+            ''|'#'*) continue ;;
+        esac
+
+        # Extraer clave (todo antes del primer '=')
+        key="${line%%=*}"
+
+        # Ignorar líneas sin '=' o con clave vacía
+        if [ -z "$key" ] || [ "$key" = "$line" ]; then
+            continue
+        fi
+
+        # Extraer valor (todo después del primer '=')
+        value="${line#*=}"
+
+        # Eliminar comentarios inline del valor
+        value=$(printf '%s' "$value" | sed 's/ *#.*//')
+
+        # Eliminar comillas envolventes del valor
+        case "$value" in
+            '"'*'"') value="${value#\"}" ; value="${value%\"}" ;;
+            "'"*"'") value="${value#\'}" ; value="${value%\'}" ;;
+        esac
+
+        # Saltarse variables exclusivas de Docker
+        if is_skip_var "$key"; then
+            continue
+        fi
+
+        # NGINX_PORT → actualizar también APP_URL
+        if [ "$key" = "NGINX_PORT" ]; then
+            sed -i "s|^#\?\s*APP_URL=.*|APP_URL=http://localhost:${value}|" "$ENV_LARAVEL"
+            if grep -q "^NGINX_PORT=" "$ENV_LARAVEL"; then
+                sed -i "s|^NGINX_PORT=.*|NGINX_PORT=${value}|" "$ENV_LARAVEL"
+            else
+                printf '\nNGINX_PORT=%s\n' "$value" >> "$ENV_LARAVEL"
+            fi
+            continue
+        fi
+
+        # APP_NAME: añadir comillas si el valor tiene espacios
+        if [ "$key" = "APP_NAME" ]; then
+            case "$value" in
+                *' '*) value="\"${value}\"" ;;
+            esac
+        fi
+
+        # Actualizar si la clave ya existe en el .env (comentada o no),
+        # o añadir al final si es una variable conocida de Laravel.
+        if grep -q "^#\?\s*${key}=" "$ENV_LARAVEL"; then
+            sed -i "s|^#\?\s*${key}=.*|${key}=${value}|" "$ENV_LARAVEL"
+        else
+            case "$key" in
+                DB_*|APP_*|VITE_*|CACHE_*|QUEUE_*|SESSION_*|REDIS_*|MAIL_*)
+                    printf '\n%s=%s\n' "$key" "$value" >> "$ENV_LARAVEL" ;;
+            esac
+        fi
+    done < "$ENV_DOCKER"
+
+    echo "✅ Variables de entorno sincronizadas."
 fi
 
-# 3. Pasos Post-Instalación (solo si acabamos de instalar)
+# ---------------------------------------------------------------------------
+# 3. Pasos post-instalación (solo en instalaciones nuevas)
+# ---------------------------------------------------------------------------
 if [ "$IS_NEW_INSTALL" = "true" ]; then
-    echo "🔧 Configuración inicial completada."
-
-    echo "🔧 Configuración de base de datos establecida en .env"
+    echo "🔧 Ejecutando pasos post-instalación..."
 
     php artisan migrate --seed
 
-    # 📦 Instalar dependencias de Node.js solo si no están instaladas
     if [ ! -d "/var/www/node_modules" ]; then
         echo "📦 Instalando dependencias de Node.js..."
         npm install
     fi
 
-    # 🛠 Modificar vite.config.js si no tiene la sección `server`
     if [ -f "/var/www/vite.config.js" ] && ! grep -q "server: {" /var/www/vite.config.js; then
-        echo "🔧 Añadiendo configuración de servidor en vite.config.js..."
-        # Insertar configuración del servidor Vite para Docker
-        # Usamos variables de entorno para puerto de cliente si están definidas
-        VITE_PORT=${VITE_PORT:-5173}
-        sed -i "/export default defineConfig({/a \    server: {\n        host: '0.0.0.0',\n        port: 5173,\n        hmr: {\n            host: 'localhost',\n            clientPort: ${VITE_PORT}\n        }\n    }," /var/www/vite.config.js
+        echo "🔧 Configurando vite.config.js para Docker..."
+        VITE_PORT_VAL=$(grep "^VITE_PORT=" "$ENV_DOCKER" 2>/dev/null | cut -d'=' -f2 | sed 's/ *#.*//' | tr -d '"' | tr -d "'")
+        VITE_PORT_VAL="${VITE_PORT_VAL:-5173}"
+        sed -i "/export default defineConfig({/a \    server: {\n        host: '0.0.0.0',\n        port: 5173,\n        hmr: {\n            host: 'localhost',\n            clientPort: ${VITE_PORT_VAL}\n        }\n    }," /var/www/vite.config.js
     fi
-
-else
-    echo "🔹 Laravel ya está instalado (o INSTALL_LARAVEL=false). Omitiendo instalación nueva."
 fi
 
 exec "$@"
