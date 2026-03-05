@@ -5,10 +5,8 @@ ENV_DOCKER="/var/www/.env_docker"
 ENV_LARAVEL="/var/www/.env"
 
 # ---------------------------------------------------------------------------
-# Read INSTALL_LARAVEL and LARAVEL_VERSION directly from the mounted
-# .env_docker file. This is more reliable than depending on Docker Compose
-# env var interpolation, which can have issues with inline comments or
-# quoted empty values (e.g. LARAVEL_VERSION="").
+# Leer INSTALL_LARAVEL y LARAVEL_VERSION directamente del fichero montado.
+# Más fiable que depender de la interpolación de Docker Compose.
 # ---------------------------------------------------------------------------
 INSTALL_LARAVEL="false"
 LARAVEL_VERSION=""
@@ -26,9 +24,10 @@ echo "⚙️  LARAVEL_VERSION=${LARAVEL_VERSION:-latest}"
 
 # ---------------------------------------------------------------------------
 # 1. Instalación de Laravel
-# Se usa el fichero `artisan` como indicador de que Laravel ya está instalado,
-# ya que es específico de Laravel y siempre está presente tras la instalación.
+# Se usa el fichero `artisan` como indicador de que Laravel ya está instalado.
 # ---------------------------------------------------------------------------
+IS_NEW_INSTALL="false"
+
 if [ "$INSTALL_LARAVEL" = "true" ] && [ ! -f /var/www/artisan ]; then
     echo "🚀 Instalando Laravel en /var/www..."
 
@@ -56,12 +55,10 @@ else
     else
         echo "🔹 Laravel ya está instalado (artisan encontrado). Omitiendo instalación nueva."
     fi
-    IS_NEW_INSTALL="false"
 fi
 
 # ---------------------------------------------------------------------------
-# Helper: decide si una variable del .env_docker es exclusiva de Docker
-# y no debe copiarse al .env de Laravel.
+# Helper: variables de .env_docker exclusivas de Docker (no se copian al .env)
 # ---------------------------------------------------------------------------
 SKIP_VARS="UID GID PHP_VERSION NODE_VERSION XDEBUG_PORT INSTALL_LARAVEL LARAVEL_VERSION MYSQL_PORT DB_ROOT_PASSWORD"
 
@@ -73,40 +70,29 @@ is_skip_var() {
 }
 
 # ---------------------------------------------------------------------------
-# 2. Sincronizar variables desde .env_docker al .env de Laravel.
-# Se lee directamente el fichero montado para que .env_docker sea la única
-# fuente de verdad: puertos, credenciales de BD, nombre de la app, etc.
+# Función: aplica las variables de .env_docker al .env de Laravel.
+# Solo se llama UNA VEZ (ver sección 2).
 # ---------------------------------------------------------------------------
-if [ -f "$ENV_LARAVEL" ] && [ -f "$ENV_DOCKER" ]; then
-    echo "🔄 Sincronizando variables desde .env_docker..."
-
+apply_env_docker() {
     while IFS= read -r line || [ -n "$line" ]; do
-        # Ignorar líneas vacías y comentarios
         case "$line" in
             ''|'#'*) continue ;;
         esac
 
-        # Extraer clave (todo antes del primer '=')
         key="${line%%=*}"
 
-        # Ignorar líneas sin '=' o con clave vacía
         if [ -z "$key" ] || [ "$key" = "$line" ]; then
             continue
         fi
 
-        # Extraer valor (todo después del primer '=')
         value="${line#*=}"
-
-        # Eliminar comentarios inline del valor
         value=$(printf '%s' "$value" | sed 's/ *#.*//')
 
-        # Eliminar comillas envolventes del valor
         case "$value" in
             '"'*'"') value="${value#\"}" ; value="${value%\"}" ;;
             "'"*"'") value="${value#\'}" ; value="${value%\'}" ;;
         esac
 
-        # Saltarse variables exclusivas de Docker
         if is_skip_var "$key"; then
             continue
         fi
@@ -129,8 +115,6 @@ if [ -f "$ENV_LARAVEL" ] && [ -f "$ENV_DOCKER" ]; then
             esac
         fi
 
-        # Actualizar si la clave ya existe en el .env (comentada o no),
-        # o añadir al final si es una variable conocida de Laravel.
         if grep -q "^#\?\s*${key}=" "$ENV_LARAVEL"; then
             sed -i "s|^#\?\s*${key}=.*|${key}=${value}|" "$ENV_LARAVEL"
         else
@@ -140,8 +124,58 @@ if [ -f "$ENV_LARAVEL" ] && [ -f "$ENV_DOCKER" ]; then
             esac
         fi
     done < "$ENV_DOCKER"
+}
 
-    echo "✅ Variables de entorno sincronizadas."
+# ---------------------------------------------------------------------------
+# 2. Configuración del .env
+#
+# REGLA FUNDAMENTAL: el .env solo se toca la PRIMERA VEZ.
+# Si ya existe, se respeta íntegramente y no se modifica nada.
+#
+# Casos:
+#   A) Instalación nueva (IS_NEW_INSTALL=true): composer ya creó el .env,
+#      lo personalizamos con los valores de .env_docker.
+#   B) Proyecto clonado sin .env: lo creamos desde .env.example y aplicamos
+#      los valores de .env_docker.
+#   C) .env ya existe: no se toca bajo ningún concepto.
+# ---------------------------------------------------------------------------
+ENV_NEEDS_SETUP="false"
+
+if [ "$IS_NEW_INSTALL" = "true" ]; then
+    # Caso A: instalación nueva, .env recién creado por composer
+    ENV_NEEDS_SETUP="true"
+elif [ ! -f "$ENV_LARAVEL" ]; then
+    # Caso B: proyecto clonado sin .env
+    if [ -f "/var/www/.env.example" ]; then
+        echo "📋 .env no encontrado. Creando desde .env.example..."
+        cp /var/www/.env.example "$ENV_LARAVEL"
+        ENV_NEEDS_SETUP="true"
+    else
+        echo "⚠️  No existe .env ni .env.example. Crea el .env manualmente antes de continuar."
+    fi
+else
+    # Caso C: .env ya existe → no se modifica
+    echo "🔹 .env existente detectado. No se modificará (edítalo directamente si necesitas cambios)."
+fi
+
+if [ "$ENV_NEEDS_SETUP" = "true" ] && [ -f "$ENV_LARAVEL" ] && [ -f "$ENV_DOCKER" ]; then
+    echo "🔄 Aplicando configuración inicial de .env_docker → .env (solo esta vez)..."
+    apply_env_docker
+
+    # Valores fijos de Docker que deben sobreescribir los del .env.example
+    sed -i "s|^#\?\s*DB_HOST=.*|DB_HOST=db|" "$ENV_LARAVEL"
+    sed -i "s|^#\?\s*DB_PORT=.*|DB_PORT=3306|" "$ENV_LARAVEL"
+    sed -i "s|^#\?\s*DB_CONNECTION=.*|DB_CONNECTION=mysql|" "$ENV_LARAVEL"
+
+    echo "✅ .env configurado. A partir de ahora, edita .env directamente."
+
+    # Generar APP_KEY si está vacía (necesario en proyectos clonados)
+    if [ -f /var/www/artisan ] && [ -d /var/www/vendor ]; then
+        if grep -q "^APP_KEY=$" "$ENV_LARAVEL" 2>/dev/null; then
+            echo "🔑 Generando APP_KEY..."
+            php artisan key:generate --no-interaction
+        fi
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -150,19 +184,34 @@ fi
 if [ "$IS_NEW_INSTALL" = "true" ]; then
     echo "🔧 Ejecutando pasos post-instalación..."
 
-    php artisan migrate --seed
+    # Esperar a que la BD esté disponible antes de migrar
+    echo "⏳ Esperando a que la base de datos esté lista..."
+    TRIES=0
+    until php artisan db:show 2>/dev/null; do
+        TRIES=$((TRIES + 1))
+        if [ "$TRIES" -ge 15 ]; then
+            echo "❌ La BD no respondió tras 15 intentos. Ejecuta 'php artisan migrate --seed' manualmente."
+            break
+        fi
+        echo "   Reintentando en 5s... ($TRIES/15)"
+        sleep 5
+    done
 
+    if php artisan migrate --seed; then
+        echo "✅ Migraciones ejecutadas."
+    fi
+
+    # Instalar dependencias Node si no existen
     if [ ! -d "/var/www/node_modules" ]; then
         echo "📦 Instalando dependencias de Node.js..."
         npm install
     fi
 
-    if [ -f "/var/www/vite.config.js" ] && ! grep -q "tailwindcss" /var/www/vite.config.js; then
-        echo "🔧 Configurando vite.config.js para Docker con Tailwind CSS..."
-        VITE_PORT_VAL=$(grep "^VITE_PORT=" "$ENV_DOCKER" 2>/dev/null | cut -d'=' -f2 | sed 's/ *#.*//' | tr -d '"' | tr -d "'")
-        VITE_PORT_VAL="${VITE_PORT_VAL:-5173}"
-        
-        cat > /var/www/vite.config.js << 'EOF'
+    # Configurar vite.config.js para Docker si aún no tiene la configuración de host
+    if [ -f "/var/www/vite.config.js" ] && ! grep -q "host: '0.0.0.0'" /var/www/vite.config.js; then
+        echo "🔧 Configurando vite.config.js para Docker (HMR)..."
+
+        cat > /var/www/vite.config.js << 'VITEEOF'
 import { defineConfig } from 'vite';
 import laravel from 'laravel-vite-plugin';
 import tailwindcss from '@tailwindcss/vite';
@@ -177,7 +226,7 @@ export default defineConfig({
     ],
     server: {
         host: '0.0.0.0',
-        port: 5173,
+        port: parseInt(process.env.VITE_PORT || 5173),
         strictPort: true,
         watch: {
             usePolling: true,
@@ -189,13 +238,26 @@ export default defineConfig({
         },
     },
 });
-EOF
-        
-        # Update the port if different from default
-        if [ "$VITE_PORT_VAL" != "5173" ]; then
-            sed -i "s/port: 5173,/port: ${VITE_PORT_VAL},/" /var/www/vite.config.js
-        fi
+VITEEOF
+
+        echo "✅ vite.config.js configurado."
     fi
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Iniciar Vite en background (solo en entornos no-producción)
+#
+# El proceso npm run dev queda como hijo de PID 1 (php-fpm tras el exec)
+# y muere limpiamente cuando el contenedor se detiene.
+# Los logs aparecen en: docker compose logs php
+# ---------------------------------------------------------------------------
+APP_ENV_VAL=$(grep "^APP_ENV=" "$ENV_LARAVEL" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | sed 's/ *#.*//')
+APP_ENV_VAL="${APP_ENV_VAL:-local}"
+
+if [ "$APP_ENV_VAL" != "production" ] && [ -f "/var/www/package.json" ] && [ -d "/var/www/node_modules" ]; then
+    echo "🎨 Iniciando servidor Vite en background (logs en: docker compose logs php)..."
+    cd /var/www && npm run dev &
+    cd /var/www
 fi
 
 exec "$@"

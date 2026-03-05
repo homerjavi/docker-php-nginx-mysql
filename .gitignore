@@ -1,0 +1,17 @@
+# Laravel
+.env
+/vendor/
+/node_modules/
+/public/hot
+/public/storage
+/storage/*.key
+/storage/app/
+/storage/framework/
+/storage/logs/
+/bootstrap/cache/
+/.phpunit.result.cache
+/coverage/
+
+# Docker data
+.docker/db/data/
+.docker/logs/*.log
