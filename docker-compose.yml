@@ -69,17 +69,19 @@ services:
         env_file:
             - .env_docker
         ports:
-            - "${MYSQL_PORT:-3306}:3306"
+            # Solo loopback: alcanzable únicamente vía túnel SSH (DBeaver, dumps).
+            # NUNCA quitar el "127.0.0.1:" → sin él Docker abre MySQL a toda la LAN.
+            - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
         volumes:
             - .docker/db/data:/var/lib/mysql
             - .docker/logs:/var/log/mysql
             - .docker/db/my.cnf:/etc/mysql/conf.d/my.cnf
             - .docker/db/sql:/docker-entrypoint-initdb.d
         environment:
-            MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-64321}
+            MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD requerido en .env_docker}
             MYSQL_DATABASE: ${DB_DATABASE:-laravel}
             MYSQL_USER: ${DB_USERNAME:-user}
-            MYSQL_PASSWORD: ${DB_PASSWORD:-123456}
+            MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD requerido en .env_docker}
 
     ####################################################################################################
     # phpMyAdmin
